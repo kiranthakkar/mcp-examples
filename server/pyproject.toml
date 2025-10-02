@@ -1,0 +1,23 @@
+[project]
+name = "server"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastmcp==2.12.4",
+    "flask>=3.1.2",
+    "oci>=2.160.2",
+    "pyjwt>=2.10.1",
+    "requests>=2.32.5",
+]
+
+# This is necessary for OIDCProxy, which will be
+# in an upcoming release (2.12.4)
+fastmcp = { git = "https://github.com/jlowin/fastmcp" }
+
+[dependency-groups]
+dev = [
+    "black>=25.9.0",
+    "flake8>=7.3.0",
+]
