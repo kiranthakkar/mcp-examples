@@ -2,6 +2,10 @@
 
 ## Getting started
 
+### Create IDCS domain
+
+### Prepare server
+
 1. Install uv
 2. Set environment variables:
 ```bash

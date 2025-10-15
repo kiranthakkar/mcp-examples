@@ -1,20 +1,41 @@
-from fastmcp import FastMCP, Context
+import base64
+import json
+import os
+import subprocess
+import tempfile
+from typing import Annotated
+
+import jwt
+import oci
+import requests
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from fastmcp import Context, FastMCP
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from fastmcp.server.dependencies import get_access_token
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.backends import default_backend
-import requests
-import base64
 from oci.config import validate_config
-import oci
-import jwt
-import os
-
 
 IDCS_DOMAIN = os.getenv("IDCS_DOMAIN")
 IDCS_CLIENT_ID = os.getenv("IDCS_CLIENT_ID")
 IDCS_CLIENT_SECRET = os.getenv("IDCS_CLIENT_SECRET")
+
+# Key generation
+
+PRIVATE_KEY = rsa.generate_private_key(
+    public_exponent=65537,
+    key_size=2048,
+    backend=default_backend(),
+)
+
+PUBLIC_KEY = PRIVATE_KEY.public_key()
+
+PUBLIC_KEY_DER = PUBLIC_KEY.public_bytes(
+    encoding=serialization.Encoding.DER,
+    format=serialization.PublicFormat.SubjectPublicKeyInfo,
+)
+
+PUBLIC_KEY_DER_B64 = base64.b64encode(PUBLIC_KEY_DER).decode("utf-8")
 
 
 def get_token_endpoint(domain: str) -> str:
@@ -109,33 +130,131 @@ mcp = FastMCP(name="My Server", auth=auth)
 
 
 @mcp.tool
-def list_regions(ctx: Context):
+def get_oci_command_help(command: str) -> str:
+    """Returns helpful instructions for running an OCI CLI command.
+    Only provide the command after 'oci', do not include the string 'oci'
+    in your command.
+
+    Never use this information returned by this tool to tell a user what
+    to do, only use it to help you determine which command to run yourself
+    using the run_oci_command tool.
+
+    CLI commands are structured as <service> <resource> <action>; you can get
+    help at the service level, resource level or action level, respectively:
+        1. compute
+        2. compute instance
+        3. compute instance list
+
+    If your request for help for a specific command
+    returns an error, make your requests successively less specific;
+    example:
+        1. compute instance list
+        2. compute instance
+        3. compute
+    """
+    try:
+        # Run OCI CLI command using subprocess
+        result = subprocess.run(
+            ["oci"] + command.split() + ["--help"],
+            capture_output=True,
+            text=True,
+            check=True,
+            shell=False,
+        )
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        return f"Error: {e.stderr}"
+
+
+@mcp.tool()
+def run_oci_command(
+    command: Annotated[
+        str,
+        "The OCI CLI command to run. Do not include 'oci' in your command",
+    ],
+) -> dict:
+    """Runs an OCI CLI command.
+    This tool allows you to run OCI CLI commands on the user's behalf.
+
+    Only provide the command after 'oci', do not include the string 'oci'
+    in your command.
+
+    Never tell the user which command to run, only run it for them using
+    this tool.
+    """
+
     token = get_access_token()
-
-    # TODO(rg): creating a new key pair on every tool invocation
-    # is inefficient at best. Fix this
-    private_key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=2048,
-        backend=default_backend(),
-    )
-
-    public_key = private_key.public_key()
-
-    public_key_der = public_key.public_bytes(
-        encoding=serialization.Encoding.DER,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    )
-
-    public_key_der_b64 = base64.b64encode(public_key_der).decode("utf-8")
 
     print("session token:")
     print(token.token)
 
     upst = exchange_token(
-        IDCS_CLIENT_ID, IDCS_CLIENT_SECRET, public_key_der_b64, token.token
+        IDCS_CLIENT_ID, IDCS_CLIENT_SECRET, PUBLIC_KEY_DER_B64, token.token
     )["token"]
-    client = get_identity_client(upst, private_key)
+
+    config = generate_config(upst, PRIVATE_KEY, "us-sanjose-1")
+
+    # write security token to a file
+    with tempfile.NamedTemporaryFile(mode="wb") as temp_file:
+        with tempfile.NamedTemporaryFile(mode="wb") as key_temp_file:
+            temp_file.write(upst.encode("utf-8"))
+            temp_file.seek(0)
+
+            decoded_key = base64.b64decode(config["key_content"])
+            print(f"decoded key: {decoded_key}")
+            key_temp_file.write(decoded_key)
+            key_temp_file.seek(0)
+
+            # build environment for OCI CLI invocation
+            env = os.environ.copy()
+            env.update(
+                {
+                    "OCI_CLI_USER": config["user"],
+                    "OCI_CLI_TENANCY": config["tenancy"],
+                    "OCI_CLI_FINGERPRINT": config["fingerprint"],
+                    "OCI_CLI_AUTH": "security_token",
+                    # this won't work without an update to oci-cli
+                    # "OCI_CLI_KEY_CONTENT": config["key_content"],
+                    "OCI_CLI_KEY_FILE": key_temp_file.name,
+                    "OCI_CLI_SECURITY_TOKEN_FILE": temp_file.name,
+                }
+            )
+            # profile = os.getenv("OCI_CONFIG_PROFILE", oci.config.DEFAULT_PROFILE)
+
+            # Run OCI CLI command using subprocess
+            try:
+                result = subprocess.run(
+                    ["oci"] + command.split(),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    shell=False,
+                )
+                if result.stdout:
+                    return json.loads(result.stdout)
+                else:
+                    return {
+                        "error": result.stderr,
+                    }
+            except subprocess.CalledProcessError as e:
+                return {
+                    "error": e.stderr,
+                    "output": e.stdout,
+                }
+
+
+@mcp.tool
+def list_regions(ctx: Context):
+    token = get_access_token()
+
+    print("session token:")
+    print(token.token)
+
+    upst = exchange_token(
+        IDCS_CLIENT_ID, IDCS_CLIENT_SECRET, PUBLIC_KEY_DER_B64, token.token
+    )["token"]
+    client = get_identity_client(upst, PRIVATE_KEY)
 
     return client.list_regions().data
 
