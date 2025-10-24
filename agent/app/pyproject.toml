@@ -1,0 +1,26 @@
+[project]
+name = "react-agent"
+version = "0.0.1"
+description = "Example agent"
+license = "UPL-1.0"
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    "langgraph>=0.6.6,<0.7.0",
+    "langchain-openai>=0.1.22",
+    "langchain-anthropic>=0.1.23",
+    "langchain>=0.2.14",
+    "langchain-fireworks>=0.1.7",
+    "python-dotenv>=1.0.1",
+    "langchain-tavily>=0.1",
+    "langchain-ollama>=0.3.10",
+    "langchain-mcp-adapters>=0.1.11",
+]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.11.1", "ruff>=0.6.1"]
+
+[dependency-groups]
+dev = [
+    "langgraph-cli[inmem]>=0.1.71",
+    "pytest>=8.3.5",
+]
