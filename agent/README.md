@@ -1,5 +1,7 @@
 # Agent
 
+An example agent and tool developed using LangGraph and the OCI Python SDK.
+
 ## Getting started
 
 ### Start Ollama and pull model
@@ -29,8 +31,7 @@ cd ..
 uv run client.py
 ```
 
-cURL
-payload.json
+cURL payload.json:
 ```json
 {
   "assistant_id": "agent",
@@ -56,3 +57,10 @@ curl -s --request POST \
     --header 'Content-Type: application/json' \
     --data @payload.json
 ```
+## Disclaimer
+
+Users are responsible for their local environment and credential safety. Different language model selections
+may yield different results and performance.
+
+All actions are performed with the permissions of the configured OCI CLI profile. We advise least-privilege
+IAM setup, secure credential management, safe network practices, secure logging, and warn against exposing secrets.

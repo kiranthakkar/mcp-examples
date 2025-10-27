@@ -28,3 +28,11 @@ export TOKEN=$(pbpaste)
 ```bash
 uv run client.py
 ```
+
+## Disclaimer
+
+Users are responsible for their local environment and credential safety. Different language model selections
+may yield different results and performance.
+
+All actions are performed with the permissions of the configured OCI CLI profile. We advise least-privilege
+IAM setup, secure credential management, safe network practices, secure logging, and warn against exposing secrets.
