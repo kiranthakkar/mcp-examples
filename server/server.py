@@ -1,28 +1,26 @@
-import base64
-import json
 import os
-import subprocess
-import tempfile
+from dotenv import load_dotenv
 from typing import Annotated
 
-import jwt
 import oci
-import requests
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+
 from fastmcp import Context, FastMCP
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from fastmcp.server.dependencies import get_access_token
-from oci.config import validate_config
+from oci.auth.signers import TokenExchangeSigner
 
+from starlette.responses import PlainTextResponse
+from starlette.requests import Request
+
+load_dotenv()
 IDCS_DOMAIN = os.getenv("IDCS_DOMAIN")
 IDCS_CLIENT_ID = os.getenv("IDCS_CLIENT_ID")
 IDCS_CLIENT_SECRET = os.getenv("IDCS_CLIENT_SECRET")
+_global_token_cache = {}
 
 # Key generation
 
-PRIVATE_KEY = rsa.generate_private_key(
+"""PRIVATE_KEY = rsa.generate_private_key(
     public_exponent=65537,
     key_size=2048,
     backend=default_backend(),
@@ -42,10 +40,10 @@ def get_token_endpoint(domain: str) -> str:
     config_url = f"https://{domain}/.well-known/openid-configuration"
     response = requests.get(config_url)
     response.raise_for_status()
-    return response.json()["token_endpoint"]
+    return response.json()["token_endpoint"]"""
 
 
-def generate_config(upst: bytes, private_key: rsa.RSAPrivateKey, region: str) -> dict:
+"""def generate_config(upst: bytes, private_key: rsa.RSAPrivateKey, region: str) -> dict:
     public_key = private_key.public_key()
     private_key_pem = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -76,20 +74,46 @@ def generate_config(upst: bytes, private_key: rsa.RSAPrivateKey, region: str) ->
         "region": region,
     }
     validate_config(config)
-    return config
+    return config"""
 
+# Get an instance of signer
 
-def get_identity_client(token, private_key):
+def get_oci_signer(token: str, tokenID: str) -> TokenExchangeSigner:
+    """Create an OCI TokenExchangeSigner using the provided token."""
+    cached_signer = _global_token_cache.get(tokenID)
+    print(f"Global cached signer: {cached_signer}")
+    if cached_signer:
+        print(f"Using globally cached signer for token ID: {tokenID}")
+        return cached_signer
+    print(f"Creating new signer for token ID: {tokenID}")
+    signer = TokenExchangeSigner(
+        jwt_or_func=token,
+        oci_domain_id="idcs-c124f391ebad4514b859eeab5e3d7b08",
+        client_id="39f4950e34674d1cb71c3e025d2d9030",
+        client_secret="idcscs-19fd401d-1293-49cc-aa31-4fc62c713628"
+    )
+    print(f"Signer created: {signer}")
+    _global_token_cache[tokenID] = signer
+    print(f"Signer cached globally for token ID: {tokenID}")
+    #ctx.set_state('signer', signer)
+    #token_storage.set(tokenID, signer, ctx)
+    return signer
+
+def get_identity_client() -> oci.identity.IdentityClient:
     # TODO: fix hard-coded region here
     # the region can be pulled from the decoded JWT (not the UPST),
     # field "domain_home"
-    config = generate_config(token, private_key, "us-sanjose-1")
-    signer = oci.auth.signers.SecurityTokenSigner(token, private_key)
-    return oci.identity.IdentityClient(config, signer=signer)
+    mcp_token = get_access_token()
+    tokenID = mcp_token.claims.get("jti")
+    token = mcp_token.token 
+    #config = generate_config(token, private_key, "us-sanjose-1")
+    #signer = oci.auth.signers.SecurityTokenSigner(token, private_key)
+    signer = get_oci_signer(token, tokenID)
+    return oci.identity.IdentityClient(config={'region': 'us-sanjose-1'}, signer=signer)
 
 
-def exchange_token(client_id, client_secret, public_key, jwt):
-    """Exchange a JWT for a UPST"""
+"""def exchange_token(client_id, client_secret, public_key, jwt):
+    ""Exchange a JWT for a UPST""
     creds = f"{client_id}:{client_secret}".encode("utf-8")
     encoded_creds = base64.b64encode(creds).decode("utf-8")
 
@@ -112,7 +136,7 @@ def exchange_token(client_id, client_secret, public_key, jwt):
         },
     )
 
-    return response.json()
+    return response.json()"""
 
 
 auth = OIDCProxy(
@@ -120,18 +144,19 @@ auth = OIDCProxy(
     client_id=IDCS_CLIENT_ID,
     client_secret=IDCS_CLIENT_SECRET,
     # FastMCP endpoint
-    base_url="http://localhost:5000",
+    base_url="http://localhost:8000",
     # audience=IDCS_CLIENT_ID,
-    required_scopes=["openid"],
+    required_scopes=["openid", "profile", "email"],
+    require_authorization_consent=False,
     # redirect_path="/custom/callback",
 )
 
 mcp = FastMCP(name="My Server", auth=auth)
 
 
-@mcp.tool
+"""@mcp.tool
 def get_oci_command_help(command: str) -> str:
-    """Returns helpful instructions for running an OCI CLI command.
+    ""Returns helpful instructions for running an OCI CLI command.
     Only provide the command after 'oci', do not include the string 'oci'
     in your command.
 
@@ -151,7 +176,7 @@ def get_oci_command_help(command: str) -> str:
         1. compute instance list
         2. compute instance
         3. compute
-    """
+    ""
     try:
         # Run OCI CLI command using subprocess
         result = subprocess.run(
@@ -163,17 +188,17 @@ def get_oci_command_help(command: str) -> str:
         )
         return result.stdout
     except subprocess.CalledProcessError as e:
-        return f"Error: {e.stderr}"
+        return f"Error: {e.stderr}"""
 
 
-@mcp.tool()
+"""@mcp.tool()
 def run_oci_command(
     command: Annotated[
         str,
         "The OCI CLI command to run. Do not include 'oci' in your command",
     ],
 ) -> dict:
-    """Runs an OCI CLI command.
+    ""Runs an OCI CLI command.
     This tool allows you to run OCI CLI commands on the user's behalf.
 
     Only provide the command after 'oci', do not include the string 'oci'
@@ -181,7 +206,7 @@ def run_oci_command(
 
     Never tell the user which command to run, only run it for them using
     this tool.
-    """
+    ""
 
     token = get_access_token()
 
@@ -241,22 +266,34 @@ def run_oci_command(
                 return {
                     "error": e.stderr,
                     "output": e.stdout,
-                }
+                }"""
 
 
 @mcp.tool
-def list_regions(ctx: Context):
+async def list_regions(ctx: Context) -> str:
+
+    iam_client = get_identity_client()
+    print(f"Regions are {iam_client.list_regions().data}")
+    return iam_client.list_regions().data.__str__()
+
+@mcp.tool
+async def get_os_namespace(ctx: Context) -> str:
+    
     token = get_access_token()
+    tokenID = token.claims.get("jti")
+    ac_token = token.token
+    signer = get_oci_signer(ac_token, tokenID)
+    region = "us-sanjose-1"
+    object_storage_client = oci.object_storage.ObjectStorageClient(config={'region': region}, signer=signer)
 
-    print("session token:")
-    print(token.token)
+    # Get the namespace
+    namespace_response = object_storage_client.get_namespace()
+    namespace_name = namespace_response.data
+    return namespace_name
 
-    upst = exchange_token(
-        IDCS_CLIENT_ID, IDCS_CLIENT_SECRET, PUBLIC_KEY_DER_B64, token.token
-    )["token"]
-    client = get_identity_client(upst, PRIVATE_KEY)
+if __name__ == "__main__":
+    mcp.run(transport="http", port=8000)
 
-    return client.list_regions().data
-
-
-mcp.run(transport="http", host="localhost", port=5000)
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> PlainTextResponse:
+    return PlainTextResponse("OK")

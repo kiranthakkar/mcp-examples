@@ -5,7 +5,7 @@ from fastmcp import Client
 from fastmcp.client.auth import OAuth
 
 oauth = OAuth(
-    mcp_url="http://localhost:5000",
+    mcp_url="http://localhost:8000",
     scopes=["openid"],
 )
 
@@ -14,8 +14,7 @@ token = os.getenv("TOKEN")
 if token:
     print("using token")
 
-client = Client("http://localhost:5000/mcp", auth=token or oauth)
-
+client = Client("http://localhost:8000/mcp", auth=token or oauth)
 
 async def main():
     async with client:
@@ -30,14 +29,9 @@ async def main():
         print(f"Prompts: {prompts}")
 
         # call list regions tool
-        # result = await client.call_tool("list_regions", {})
-        result = await client.call_tool(
-            "run_oci_command",
-            {
-                "command": "iam region list",
-            },
-        )
+        result = await client.call_tool("list_regions", {})
+        result = await client.call_tool("get_os_namespace", {})
         print(result)
 
-
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
